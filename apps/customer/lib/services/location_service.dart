@@ -39,7 +39,7 @@ class LocationService {
       },
     );
     if (response.statusCode != 200) {
-      throw Exception('Search failed');
+      throw Exception('Search failed: ${response.statusCode} (${uri.path})');
     }
 
     final decoded = jsonDecode(response.body) as List<dynamic>;
@@ -73,31 +73,23 @@ class LocationService {
       },
     );
 
-    try {
-      final response = await http.get(
-        uri,
-        headers: const <String, String>{
-          'Accept': 'application/json',
-          'User-Agent': _userAgent,
-        },
-      );
-      if (response.statusCode != 200) {
-        throw Exception('Reverse lookup failed');
-      }
-
-      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-      final displayName = (decoded['display_name'] as String?)?.trim();
-      if (displayName != null && displayName.isNotEmpty) {
-        return displayName;
-      }
-    } catch (_) {
-      // Fall through to the pinned-location fallback.
+    final response = await http.get(
+      uri,
+      headers: const <String, String>{
+        'Accept': 'application/json',
+        'User-Agent': _userAgent,
+      },
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Reverse lookup failed: ${response.statusCode} (${uri.path})');
     }
 
-    return _pinnedLocationLabel(point);
-  }
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final displayName = (decoded['display_name'] as String?)?.trim();
+    if (displayName != null && displayName.isNotEmpty) {
+      return displayName;
+    }
 
-  String _pinnedLocationLabel(LatLng point) {
-    return 'Pinned location (${point.latitude.toStringAsFixed(5)}, ${point.longitude.toStringAsFixed(5)})';
+    throw Exception('Reverse lookup failed: missing display_name (${uri.path})');
   }
 }

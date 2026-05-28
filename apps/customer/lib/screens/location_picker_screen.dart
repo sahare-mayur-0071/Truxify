@@ -65,6 +65,19 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   }
 
   Future<void> _searchPlaces(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.length < 3) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _suggestions = const <LocationSuggestion>[];
+        _isSearching = false;
+      });
+      return;
+    }
+
     setState(() {
       _isSearching = true;
     });
