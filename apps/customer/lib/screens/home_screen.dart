@@ -1,7 +1,10 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../controllers/app_controller.dart';
+import '../core/offline/cache/cache_manager.dart';
 import '../data/mock_data.dart';
 import '../models/app_models.dart';
 import '../theme/app_theme.dart';
@@ -11,9 +14,41 @@ import '../widgets/shipment_card.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/recent_route_card.dart';
 import 'live_tracking_screen.dart';
+import 'notifications_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final CacheManager _cacheManager = CacheManager();
+  bool _isOffline = false;
+  String _locationLabel = 'Surat, Gujarat';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocation();
+  }
+
+  Future<void> _loadLocation() async {
+    final connectivity = await Connectivity().checkConnectivity();
+    final hasNetwork = connectivity != ConnectivityResult.none;
+    await _cacheManager.open();
+    await _cacheManager.cacheLastLocation(21.1702, 72.8311);
+    final cachedLocation = await _cacheManager.getLastLocation();
+    if (!mounted) return;
+
+    setState(() {
+      _isOffline = !hasNetwork;
+      if (cachedLocation != null) {
+        _locationLabel = 'Last truck location • ${cachedLocation['latitude']?.toStringAsFixed(3)}, ${cachedLocation['longitude']?.toStringAsFixed(3)}';
+      }
+    });
+  }
 
   static String _greetingFor(DateTime time) {
     final hour = time.hour;
@@ -46,6 +81,7 @@ class HomeScreen extends StatelessWidget {
     final now = DateTime.now();
     final customerFirstName = mockCustomerName.split(' ').first;
     final greeting = _greetingFor(now);
+    final quickStats = mockQuickStats.take(3).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -64,19 +100,21 @@ class HomeScreen extends StatelessWidget {
                     color: Theme.of(context).brightness == Brightness.dark ? TruxifyColors.darkBorder : TruxifyColors.border,
                   ),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.place_rounded, size: 16, color: TruxifyColors.accentDark),
-                    SizedBox(width: 6),
-                    Text('Surat, Gujarat', style: TextStyle(fontWeight: FontWeight.w700)),
+                    const Icon(Icons.place_rounded, size: 16, color: TruxifyColors.accentDark),
+                    const SizedBox(width: 6),
+                    Text(_isOffline ? _locationLabel : 'Surat, Gujarat', style: const TextStyle(fontWeight: FontWeight.w700)),
                   ],
                 ),
               ),
             ),
           ),
           IconButton(
-            onPressed: () => _showComingSoon(context, 'Notifications'),
+            onPressed: () => Navigator.of(context).push(
+              AppPageRoute(builder: (_) => const NotificationsScreen()),
+            ),
             icon: const Icon(Icons.notifications_none_rounded),
           ),
         ],
@@ -117,11 +155,16 @@ class HomeScreen extends StatelessWidget {
             const SizedBox(height: 24),
             Row(
               children: [
-                Expanded(child: StatCard(title: mockQuickStats[0].title, value: mockQuickStats[0].value, icon: mockQuickStats[0].icon)),
-                const SizedBox(width: 10),
-                Expanded(child: StatCard(title: mockQuickStats[1].title, value: mockQuickStats[1].value, icon: mockQuickStats[1].icon)),
-                const SizedBox(width: 10),
-                Expanded(child: StatCard(title: mockQuickStats[2].title, value: mockQuickStats[2].value, icon: mockQuickStats[2].icon)),
+                for (final stat in quickStats) ...[
+                  Expanded(
+                    child: StatCard(
+                      title: stat.title,
+                      value: stat.value,
+                      icon: stat.icon,
+                    ),
+                  ),
+                  if (stat != quickStats.last) const SizedBox(width: 10),
+                ],
               ],
             ),
             const SizedBox(height: 24),
