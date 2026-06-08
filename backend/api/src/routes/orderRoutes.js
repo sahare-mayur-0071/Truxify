@@ -2,6 +2,7 @@ import express from 'express';
 import { supabase } from '../config/db.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { computeOrderPricing } from '../lib/pricing.js';
+import { z } from 'zod';
 
 const router = express.Router();
 
@@ -13,6 +14,10 @@ function generateOrderDisplayId() {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
   const random = Math.floor(1000 + Math.random() * 9000); // 4 random digits
+  const numberSchema = z.preprocess(
+  (val) => (val !== undefined && val !== "" ? Number(val) : undefined),
+  z.number().min(-180).max(180).optional() // Adjust min/max for your needs
+);
   return `${prefix}${dateStr}${random}`;
 }
 
