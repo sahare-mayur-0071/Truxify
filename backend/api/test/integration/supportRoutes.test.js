@@ -72,7 +72,7 @@ describe('Support Routes', () => {
     expect(faqQuery.order).toEqual({ col: 'sort_order', ascending: true });
   });
 
-  it('GET /faqs filters by app_type when provided', async () => {
+  it('GET /faqs filters by app_type and includes both-type FAQs when provided', async () => {
     m.store.faqs.push(
       {
         id: 'faq-customer',
@@ -89,14 +89,22 @@ describe('Support Routes', () => {
         app_type: 'driver',
         sort_order: 20,
         is_active: true,
+      },
+      {
+        id: 'faq-both',
+        question: 'Shared question?',
+        answer: 'Shared answer',
+        app_type: 'both',
+        sort_order: 15,
+        is_active: true,
       }
     );
 
     const res = await request(buildApp()).get('/api/support/faqs?app_type=driver');
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].id).toBe('faq-driver');
+    expect(res.body).toHaveLength(2);
+    expect(res.body.map(f => f.id)).toEqual(['faq-both', 'faq-driver']);
   });
 
   it('POST /tickets requires authenticated headers in auth bypass mode', async () => {
@@ -117,11 +125,15 @@ describe('Support Routes', () => {
     expect(res.body.error).toBe('subject and category are required.');
   });
 
-  it('POST /tickets creates an open ticket for the authenticated user', async () => {
+  it('POST /tickets creates an open ticket for the authenticated user with category mapping and description', async () => {
     const res = await request(buildApp())
       .post('/api/support/tickets')
       .set(CUSTOMER_HEADERS)
-      .send({ subject: '  App payment issue  ', category: ' billing ' });
+      .send({
+        subject: '  App payment issue  ',
+        category: ' billing ',
+        description: 'My custom description details'
+      });
 
     expect(res.status).toBe(201);
     expect(res.body.message).toBe('Support ticket created successfully.');
@@ -131,9 +143,21 @@ describe('Support Routes', () => {
     expect(ticketInsert.payload).toEqual({
       user_id: 'customer-1',
       subject: 'App payment issue',
-      category: 'billing',
+      description: 'My custom description details',
+      category: 'payment',
       status: 'open',
     });
+  });
+
+  it('POST /tickets defaults description to subject when omitted', async () => {
+    const res = await request(buildApp())
+      .post('/api/support/tickets')
+      .set(CUSTOMER_HEADERS)
+      .send({ subject: 'Help needed', category: 'technical' });
+
+    expect(res.status).toBe(201);
+    const ticketInsert = m.calls.find(c => c.table === 'support_tickets' && c.mode === 'insert');
+    expect(ticketInsert.payload.description).toBe('Help needed');
   });
 
   it('GET /tickets returns only tickets owned by the authenticated user', async () => {

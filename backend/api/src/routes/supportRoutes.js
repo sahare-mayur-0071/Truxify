@@ -5,7 +5,7 @@ import { authenticate } from '../middleware/auth.js';
 const router = express.Router();
 
 const FAQ_COLUMNS = 'id, question, answer, app_type, sort_order';
-const TICKET_COLUMNS = 'id, subject, category, status, created_at';
+const TICKET_COLUMNS = 'id, subject, description, category, status, created_at';
 
 function normalizeRequiredText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -25,7 +25,7 @@ router.get('/faqs', async (req, res) => {
       .order('sort_order', { ascending: true });
 
     if (appType) {
-      query = query.eq('app_type', appType);
+      query = query.in('app_type', [appType, 'both']);
     }
 
     const { data: faqs, error } = await query;
@@ -49,6 +49,7 @@ router.get('/faqs', async (req, res) => {
 router.post('/tickets', authenticate, async (req, res) => {
   const subject = normalizeRequiredText(req.body.subject);
   const category = normalizeRequiredText(req.body.category);
+  const description = normalizeRequiredText(req.body.description) || subject;
 
   if (!subject || !category) {
     return res.status(400).json({
@@ -56,13 +57,28 @@ router.post('/tickets', authenticate, async (req, res) => {
     });
   }
 
+  // Map user-friendly/frontend categories to database-constrained values
+  const CATEGORY_MAP = {
+    billing: 'payment',
+    booking: 'order',
+    payment: 'payment',
+    order: 'order',
+    technical: 'technical',
+    general: 'general',
+    account: 'account'
+  };
+
+  const normalizedCategory = category.toLowerCase();
+  const dbCategory = CATEGORY_MAP[normalizedCategory] || 'general';
+
   try {
     const { data: ticket, error } = await supabase
       .from('support_tickets')
       .insert({
         user_id: req.user.id,
         subject,
-        category,
+        description,
+        category: dbCategory,
         status: 'open',
       })
       .select(TICKET_COLUMNS)
