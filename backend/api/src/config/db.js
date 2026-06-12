@@ -89,7 +89,6 @@ if (redisUrl) {
 } else {
   console.warn('⚠️ REDIS_URL not found in .env. Redis session cache disabled.');
 }
-console.log("FIREBASE RAW VALUE:", process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
 // ============================================================================
 // 4. FIREBASE ADMIN SDK (SAFE OPTIONAL INIT)
 // ============================================================================

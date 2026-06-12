@@ -5,11 +5,18 @@ import { supabase } from '../config/db.js';
  */
 export async function registerDeviceToken(req, res) {
   try {
-    const { userId, fcmToken, platform } = req.body;
+    const userId = req.user?.id;
+    const { fcmToken, platform } = req.body;
 
-    if (!userId || !fcmToken) {
+    if (!userId) {
+      return res.status(401).json({
+        error: 'User not authenticated'
+      });
+    }
+
+    if (!fcmToken) {
       return res.status(400).json({
-        error: 'userId and fcmToken are required'
+        error: 'fcmToken is required'
       });
     }
 
@@ -20,8 +27,9 @@ export async function registerDeviceToken(req, res) {
     });
 
     if (error) {
+      console.error('[DeviceController] Failed to register device token in database:', error.message);
       return res.status(500).json({
-        error: error.message
+        error: 'Failed to register device'
       });
     }
 
@@ -30,8 +38,9 @@ export async function registerDeviceToken(req, res) {
       message: 'Device token registered'
     });
   } catch (err) {
+    console.error('[DeviceController] Unexpected error in registerDeviceToken:', err.message);
     return res.status(500).json({
-      error: err.message
+      error: 'An unexpected error occurred'
     });
   }
 }
