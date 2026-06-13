@@ -117,15 +117,45 @@ erDiagram
 
 ---
 
-## 🧠 Logical Relationships (Zero Foreign Keys)
+## 🧠 Referential Integrity Model
 
 > [!IMPORTANT]
-> Truxify enforces **no physical foreign keys** in the database layer. All table associations are maintained logically at the application-layer (via REST query filters or RPC joins). 
-> 
+> Truxify now enforces physical foreign keys for critical financial and operational entities. This keeps the core user, order, load, bid, rating, wallet, notification, and support data consistent at the database layer.
+>
 > **Why?**
-> 1. **Decoupled Scaling**: Allows database partitions or separate micro-backends to scale independently (e.g., migrating trips to a separate database server in the future without breaking constraints).
-> 2. **Flexible Deletions & Archive**: Archiving or cleaning up old orders does not result in cascade errors or locks.
-> 3. **Improved Performance**: Eliminates parent-check write locks on heavy inserts.
+> 1. **Data safety**: Invalid references are rejected before they reach application logic.
+> 2. **Operational consistency**: Cascades are used only where child rows are ownership records that should disappear with the parent.
+> 3. **Auditability**: Financial and transactional records remain protected with `RESTRICT` where deletion would break history.
+
+### Enforced foreign keys
+
+* `driver_details.user_id → profiles.id` with `ON DELETE CASCADE`
+* `driver_details.truck_id → trucks.id` with `ON DELETE SET NULL`
+* `customer_stats.user_id → profiles.id` with `ON DELETE CASCADE`
+* `trucks.driver_id → profiles.id` with `ON DELETE RESTRICT`
+* `orders.customer_id → profiles.id` with `ON DELETE RESTRICT`
+* `orders.driver_id → profiles.id` with `ON DELETE SET NULL`
+* `load_offers.customer_id → profiles.id` with `ON DELETE RESTRICT`
+* `load_bids.load_id → load_offers.id` with `ON DELETE CASCADE`
+* `load_bids.driver_id → profiles.id` with `ON DELETE RESTRICT`
+* `ratings.customer_id → profiles.id` with `ON DELETE RESTRICT`
+* `ratings.driver_id → profiles.id` with `ON DELETE RESTRICT`
+* `ratings.order_display_id → orders.order_display_id` with `ON DELETE RESTRICT`
+* `wallet_transactions.driver_id → profiles.id` with `ON DELETE RESTRICT`
+* `wallet_transactions.order_display_id → orders.order_display_id` with `ON DELETE RESTRICT`
+* `wallet_transactions.trip_display_id → trips.trip_display_id` with `ON DELETE RESTRICT`
+* `notifications.user_id → profiles.id` with `ON DELETE RESTRICT`
+* `support_tickets.user_id → profiles.id` with `ON DELETE RESTRICT`
+* `order_timeline.order_display_id → orders.order_display_id` with `ON DELETE CASCADE`
+* `trip_items.trip_display_id → trips.trip_display_id` with `ON DELETE CASCADE`
+* `trip_stops.trip_display_id → trips.trip_display_id` with `ON DELETE CASCADE`
+* `route_map_points.trip_display_id → trips.trip_display_id` with `ON DELETE CASCADE`
+* `documents.user_id → profiles.id` with `ON DELETE CASCADE`
+* `tyre_diagnostics.truck_id → trucks.id` with `ON DELETE CASCADE`
+* `truck_maintenance_tickets.truck_id → trucks.id` with `ON DELETE CASCADE`
+* `truck_maintenance_tickets.driver_id → profiles.id` with `ON DELETE RESTRICT`
+* `saved_addresses.user_id → profiles.id` with `ON DELETE CASCADE`
+* `payment_methods.user_id → profiles.id` with `ON DELETE CASCADE`
 
 ---
 
