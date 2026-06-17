@@ -3,8 +3,12 @@ import { RedisStore } from 'rate-limit-redis';
 import { redisClient } from '../config/db.js';
 import logger from './logger.js';
 
+function isRedisReady() {
+  return redisClient && redisClient.status === 'ready';
+}
+
 function buildStore(prefix) {
-  if (!redisClient) {
+  if (!isRedisReady()) {
     logger.warn('Redis unavailable. Falling back to memory rate limiter.');
     return undefined;
   }
@@ -47,7 +51,11 @@ export const bidLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.user?.uid ?? ipKeyGenerator(req),
+  keyGenerator: (req) => {
+    if (req.user?.id) return `user:${req.user.id}`;
+    if (req.user?.uid) return `uid:${req.user.uid}`;
+    return ipKeyGenerator(req);
+  },
   store: buildStore('rl:bid:'),
   message: { error: 'Rate limit exceeded', retryAfter: 60 },
 });
