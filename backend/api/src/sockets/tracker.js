@@ -330,10 +330,15 @@ export async function handleLocationPing(ws, data) {
     return ws.send(JSON.stringify({ error: 'Unauthorized: driver_id does not match authenticated WebSocket identity.' }));
   }
 
-  // Fix 3: Coordinate validation — proper null/undefined and type checks
-  if (latitude === null || latitude === undefined || typeof latitude !== 'number' ||
-      longitude === null || longitude === undefined || typeof longitude !== 'number') {
+  // Fix 3: Coordinate validation — proper null/undefined, type, and range validation
+  if (latitude === null || latitude === undefined || typeof latitude !== 'number' || !Number.isFinite(latitude) ||
+      longitude === null || longitude === undefined || typeof longitude !== 'number' || !Number.isFinite(longitude)) {
     return ws.send(JSON.stringify({ error: 'Missing mandatory tracking parameters (lat, lng).' }));
+  }
+
+  // Range validation
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    return ws.send(JSON.stringify({ error: 'Coordinates out of valid range' }));
   }
 
   // Parse device timestamp for analytics and clock skew check only (Fix 1)

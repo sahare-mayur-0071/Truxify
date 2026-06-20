@@ -576,6 +576,115 @@ describe('handleLocationPing - main telemetry flow', () => {
     expect(sentMessages[0].error).toContain('Missing mandatory tracking parameters');
   });
 
+  it('rejects coordinates out of range (latitude too low)', async () => {
+    const sentMessages = [];
+    const ws = {
+      driverId: 'driver-1',
+      send(msg) { sentMessages.push(JSON.parse(msg)); }
+    };
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: -90.1,
+      longitude: 77.5,
+    });
+
+    expect(sentMessages[0].error).toContain('Coordinates out of valid range');
+  });
+
+  it('rejects coordinates out of range (latitude too high)', async () => {
+    const sentMessages = [];
+    const ws = {
+      driverId: 'driver-1',
+      send(msg) { sentMessages.push(JSON.parse(msg)); }
+    };
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: 90.1,
+      longitude: 77.5,
+    });
+
+    expect(sentMessages[0].error).toContain('Coordinates out of valid range');
+  });
+
+  it('rejects coordinates out of range (longitude too low)', async () => {
+    const sentMessages = [];
+    const ws = {
+      driverId: 'driver-1',
+      send(msg) { sentMessages.push(JSON.parse(msg)); }
+    };
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: 12.9,
+      longitude: -180.1,
+    });
+
+    expect(sentMessages[0].error).toContain('Coordinates out of valid range');
+  });
+
+  it('rejects coordinates out of range (longitude too high)', async () => {
+    const sentMessages = [];
+    const ws = {
+      driverId: 'driver-1',
+      send(msg) { sentMessages.push(JSON.parse(msg)); }
+    };
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: 12.9,
+      longitude: 180.1,
+    });
+
+    expect(sentMessages[0].error).toContain('Coordinates out of valid range');
+  });
+
+  it('accepts boundary coordinate values (-90, -180) and (90, 180)', async () => {
+    const ws = {
+      driverId: 'driver-1',
+      send: vi.fn(),
+    };
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: -90,
+      longitude: -180,
+    });
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: 90,
+      longitude: 180,
+    });
+
+    expect(ws.send).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-finite coordinate values (NaN, Infinity)', async () => {
+    const sentMessages = [];
+    const ws = {
+      driverId: 'driver-1',
+      send(msg) { sentMessages.push(JSON.parse(msg)); }
+    };
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: NaN,
+      longitude: 77.5,
+    });
+
+    await handleLocationPing(ws, {
+      driver_id: 'driver-1',
+      latitude: 12.9,
+      longitude: Infinity,
+    });
+
+    expect(sentMessages).toHaveLength(2);
+    expect(sentMessages[0].error).toContain('Missing mandatory tracking parameters');
+    expect(sentMessages[1].error).toContain('Missing mandatory tracking parameters');
+  });
+
   it('handles malformed device_timestamp gracefully', async () => {
     const ws = {
       driverId: 'driver-1',
