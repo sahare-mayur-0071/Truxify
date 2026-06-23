@@ -537,7 +537,7 @@ describe('requireRole middleware', () => {
     vi.resetModules();
   });
 
-  it('returns 501 when req.user is not set', async () => {
+  it('returns 500 when req.user is not set', async () => {
     vi.doMock('../../src/config/db.js', () => ({
       firebaseAdmin: null,
       supabase: null,
@@ -554,7 +554,20 @@ describe('requireRole middleware', () => {
 
     middleware(req, res, vi.fn());
 
-    expect(res.status).toHaveBeenCalledWith(501);
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('throws an error on initialization if allowedRoles is missing or empty', async () => {
+    vi.doMock('../../src/config/db.js', () => ({
+      firebaseAdmin: null,
+      supabase: null,
+    }));
+
+    const { requireRole } = await import('../../src/middleware/auth.js');
+
+    expect(() => requireRole()).toThrow('requireRole middleware requires a non-empty array of allowed roles.');
+    expect(() => requireRole([])).toThrow('requireRole middleware requires a non-empty array of allowed roles.');
+    expect(() => requireRole('driver')).toThrow('requireRole middleware requires a non-empty array of allowed roles.');
   });
 
   it('returns 403 when user role is not in allowedRoles', async () => {

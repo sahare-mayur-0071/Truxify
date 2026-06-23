@@ -179,9 +179,13 @@ export async function authenticate(req, res, next) {
  * Must be used after authenticate middleware.
  */
 export function requireRole(allowedRoles) {
+  if (!Array.isArray(allowedRoles) || allowedRoles.length === 0) {
+    throw new Error('requireRole middleware requires a non-empty array of allowed roles.');
+  }
+
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(501).json({ error: 'Security middleware configuration error.' });
+      return res.status(500).json({ error: 'Security middleware configuration error: missing req.user.' });
     }
 
     if (!allowedRoles.includes(req.user.role)) {
