@@ -1,10 +1,12 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { ethers } from 'ethers';
 import { bidLimiter, userLimiter } from '../middleware/rateLimiter.js';
-import { supabase, redisClient } from '../config/db.js';
+import { supabase, redisClient, mongoDb } from '../config/db.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { validateBody, validateParams } from '../middleware/validate.js';
+import { z } from 'zod';
 import { computeOrderPricing } from '../lib/pricing.js';
 import { getRouteEstimate } from '../services/osrm.js';
 import {
@@ -18,12 +20,10 @@ import {
   predictDemandSchema
 } from '../validation/requestSchemas.js';
 import { awardReputationPoints } from '../services/reputation.js';
-import { changeDropSchema, cancelOrderSchema } from '../validation/requestSchemas.js';
-import { buildDepositTx, recordDepositTx, escrowRelease, escrowRefund } from '../services/escrow.js';
-import { sendDeliveryOtpNotification, storeDeliveryOtp, getActiveDeliveryOtp, verifyDeliveryOtp, expireDeliveryOtps } from '../services/notificationService.js';
 import { predictDemand, predictPrice } from '../services/ml.js';
-import rateLimit from 'express-rate-limit';
-import { z } from 'zod';
+import { changeDropSchema, cancelOrderSchema } from '../validation/requestSchemas.js';
+import { buildDepositTx, recordDepositTx, escrowRelease, escrowRefund, ESCROW_MATIC_PER_PAISA } from '../services/escrow.js';
+import { sendDeliveryOtpNotification, storeDeliveryOtp, getActiveDeliveryOtp, verifyDeliveryOtp, expireDeliveryOtps } from '../services/notificationService.js';
 import logger from '../middleware/logger.js';
 
 const router = express.Router();
@@ -205,7 +205,7 @@ router.post('/', authenticate, userLimiter, requireRole(['customer']), validateB
     }
     estimatedPrice = Math.round(mlResult.estimated_price * 100);
   } catch (mlErr) {
-    console.warn('[ML] Price prediction unavailable, falling back to base pricing:', mlErr.message);
+    logger.warn({ err: mlErr.message }, 'Price prediction unavailable, falling back to base pricing');
   }
 
   const orderDisplayId = generateOrderDisplayId();
@@ -676,10 +676,11 @@ router.post('/:id/bids/:bidId/accept', authenticate, userLimiter, requireRole(['
     // Phase 1: Build unsigned deposit tx for customer to sign
     let depositTxData = null;
     if (driverWallet && customerWallet) {
-      const maticPerPaisa = parseFloat(process.env.ESCROW_MATIC_PER_PAISA || '0');
-      if (!maticPerPaisa || !isFinite(maticPerPaisa) || maticPerPaisa <= 0) {
+      const maticPerPaisa = ESCROW_MATIC_PER_PAISA;
+      if (!Number.isFinite(maticPerPaisa) || maticPerPaisa <= 0) {
         logger.warn('[escrow] ESCROW_MATIC_PER_PAISA not configured — skipping escrow deposit.');
       } else {
+        // `bid.bid_amount` is stored in paise; apply per-paisa MATIC rate directly
         const maticAmount = (bid.bid_amount * maticPerPaisa).toFixed(18);
         const maxEscrowMatic = Number.parseFloat(process.env.MAX_ESCROW_MATIC || '5');
         if (!Number.isFinite(maxEscrowMatic) || maxEscrowMatic <= 0) {
@@ -694,7 +695,28 @@ router.post('/:id/bids/:bidId/accept', authenticate, userLimiter, requireRole(['
           order.order_display_id, customerWallet, driverWallet, amountWei,
         );
         if (txData) {
-          depositTxData = txData;
+          // Normalise txData: allow both populated transaction objects and
+          // raw signed/populated hex strings returned by mocks.
+          if (typeof txData === 'string' && txData.startsWith('0x')) {
+            try {
+              const parsed = ethers.Transaction.from(txData);
+              depositTxData = {
+                to: parsed.to,
+                data: parsed.data,
+                value: parsed.value ? parsed.value.toString() : undefined,
+              };
+            } catch (parseErr) {
+              // Fallback: when txData is a raw hex string, preserve the data
+              // and supply a fallback recipient address so UI consumers can
+              // still handle the transaction object shape.
+              depositTxData = {
+                to: process.env.ESCROW_CONTRACT_ADDRESS || '0x0000000000000000000000000000000000000000',
+                data: txData,
+              };
+            }
+          } else {
+            depositTxData = txData;
+          }
           await supabase.from('orders').update({
             escrow_booking_id: `escrow:${order.order_display_id}`,
             escrow_status: 'funding',
@@ -724,6 +746,7 @@ router.post('/:id/bids/:bidId/accept', authenticate, userLimiter, requireRole(['
       depositTx: depositTxData,
     });
   } catch (err) {
+    logger.error({ err }, '[orderRoutes] accept bid error');
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -775,7 +798,14 @@ router.put('/:id/milestones', authenticate, userLimiter, requireRole(['driver'])
     if (timelineErr) return res.status(500).json({ error: 'Failed to update order timeline.', details: timelineErr.message });
 
     if (generatedOtp) {
-      await sendDeliveryOtpNotification(order.customer_id, order.order_display_id, generatedOtp);
+      const notifResult = await sendDeliveryOtpNotification(order.customer_id, order.order_display_id, generatedOtp);
+      if (!notifResult.success) {
+        logger.warn(`[OrderRoutes] Delivery OTP notification failed for order ${order.order_display_id} — FCM error: ${notifResult.fcm?.error || 'unknown'}`);
+        await supabase.from('orders').update({
+          notification_failed: true,
+          updated_at: new Date().toISOString(),
+        }).eq('id', orderId);
+      }
     }
 
     const response = { message: 'Milestone updated successfully.', order: updatedOrder, milestone, status };
@@ -1002,8 +1032,45 @@ router.post('/:id/cancel', authenticate, userLimiter, requireRole(['customer']),
       return res.status(409).json({ error: 'Cannot cancel: delivery OTP has already been verified.' });
     }
 
+    let refundTxHash = null;
+    // Phase 1: Process escrow refund BEFORE changing order status
+    if (order.escrow_status === 'funded') {
+      try {
+        const { txHash } = await escrowRefund(order.order_display_id);
+        refundTxHash = txHash;
+      } catch (refundErr) {
+        logger.error('[escrow] Refund failed for order', orderId, ':', refundErr.message);
+        return res.status(502).json({
+          error: 'Escrow refund failed. Order was not cancelled.',
+          details: 'The blockchain transaction could not be completed. Please try again or contact support.',
+        });
+      }
+
+      if (!refundTxHash) {
+        logger.error('[escrow] Refund returned null txHash for order', orderId);
+        return res.status(502).json({
+          error: 'Escrow refund could not be processed. Order was not cancelled.',
+        });
+      }
+    } else if (order.escrow_booking_id) {
+      logger.info(`[escrow] Escrow not funded (status: ${order.escrow_status}) — skipping on-chain refund.`);
+    }
+
+    // Phase 2: Change order status to cancelled and update escrow record atomically
+    const updatePayload = {
+      status: 'cancelled',
+      cancellation_reason: reason,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (order.escrow_status === 'funded') {
+      updatePayload.escrow_status = 'refunded';
+      updatePayload.refund_tx_hash = refundTxHash;
+      updatePayload.escrow_refunded_at = new Date().toISOString();
+    }
+
     const { data: updatedOrder, error: updateErr } = await supabase.from('orders')
-      .update({ status: 'cancelled', cancellation_reason: reason, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('order_display_id', orderId)
       .not('status', 'in', '("delivered","payment_released","cancelled")')
       .select('cancellation_fee, order_display_id, status, cancellation_reason, escrow_status')
@@ -1020,23 +1087,6 @@ router.post('/:id/cancel', authenticate, userLimiter, requireRole(['customer']),
     await supabase.from('order_timeline').update({ completed: true, milestone_time: new Date().toISOString() })
       .eq('order_display_id', order.order_display_id)
       .eq('milestone', 'Order Placed');
-
-    if (updatedOrder.escrow_status === 'funded') {
-      try {
-        const { txHash } = await escrowRefund(order.order_display_id);
-        if (txHash) {
-          await supabase.from('orders').update({
-            escrow_status: 'refunded',
-            refund_tx_hash: txHash,
-            escrow_refunded_at: new Date().toISOString(),
-          }).eq('order_display_id', orderId);
-        }
-      } catch (refundErr) {
-        logger.error('[escrow] Refund failed for order', orderId, ':', refundErr.message);
-      }
-    } else if (order.escrow_booking_id) {
-      logger.info(`[escrow] Escrow not funded (status: ${updatedOrder.escrow_status}) — skipping on-chain refund.`);
-    }
 
     return res.json({ message: 'Order cancelled successfully.', cancellation_fee: cancellationFee, order: updatedOrder });
   } catch (err) {
@@ -1079,7 +1129,7 @@ router.post('/:id/confirm-deposit', authenticate, userLimiter, requireRole(['cus
 
     res.json({ message: 'Escrow deposit confirmed', txHash: result.txHash });
   } catch (err) {
-    console.error('[confirm-deposit] Exception:', err.message);
+    logger.error('[confirm-deposit] Exception:', err.message);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -1097,6 +1147,70 @@ router.post('/predict-demand', authenticate, userLimiter, requireRole(['customer
       error: 'Failed to fetch demand prediction from ML engine.',
       details: err.message,
     });
+  }
+});
+
+// ============================================================================
+// 17. GET DRIVER LOCATION (CUSTOMER OR DRIVER)
+// ============================================================================
+router.get('/:id/driver-location', authenticate, requireRole(['customer', 'driver']), validateParams(paramIdSchema), async (req, res) => {
+  const orderId = req.params.id; // this is order_display_id from client
+  
+  try {
+    // 1. Resolve order and check authentication / authorization
+    const { data: order, error: orderErr } = await supabase
+      .from('orders')
+      .select('id, customer_id, driver_id, status')
+      .eq('order_display_id', orderId)
+      .maybeSingle();
+
+    if (orderErr) {
+      return res.status(500).json({ error: 'Failed to fetch order details.' });
+    }
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    // Authorization: User must be either the customer who owns the order or the assigned driver
+    if (req.user.role === 'customer' && order.customer_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access Denied: You do not own this order.' });
+    }
+    if (req.user.role === 'driver' && order.driver_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access Denied: You are not assigned to this order.' });
+    }
+
+    if (!order.driver_id) {
+      return res.status(404).json({ error: 'No driver assigned to this order.' });
+    }
+
+    // 2. Query MongoDB telemetry collection
+    if (!mongoDb) {
+      return res.status(503).json({ error: 'Telemetry database not available.' });
+    }
+
+    const latestTelemetry = await mongoDb
+      .collection('telemetry')
+      .find({ driver_id: order.driver_id })
+      .sort({ timestamp: -1 })
+      .limit(1)
+      .toArray();
+
+    if (!latestTelemetry || latestTelemetry.length === 0) {
+      return res.status(404).json({ error: 'No live telemetry found for this driver.' });
+    }
+
+    const telemetry = latestTelemetry[0];
+    return res.json({
+      driverId: telemetry.driver_id,
+      orderId: telemetry.order_id || order.id,
+      lat: telemetry.lat,
+      lng: telemetry.lng,
+      timestamp: telemetry.timestamp
+    });
+
+  } catch (err) {
+    logger.error({ err }, 'Fetch driver location exception');
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
