@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/.env"
 CUSTOMER_FILE="$ROOT_DIR/apps/customer/dart_define.json"
 DRIVER_FILE="$ROOT_DIR/apps/driver/dart_define.json"
-REQUIRED_VARS=(SUPABASE_URL SUPABASE_ANON_KEY TRUXIFY_API_BASE_URL)
+REQUIRED_VARS=(SUPABASE_URL SUPABASE_ANON_KEY TRUXIFY_API_BASE_URL FIREBASE_API_KEY FIREBASE_PROJECT_ID FIREBASE_MESSAGING_SENDER_ID FIREBASE_CUSTOMER_APP_ID FIREBASE_DRIVER_APP_ID)
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Error: .env file not found at $ENV_FILE"
@@ -55,7 +55,8 @@ fi
 
 write_json() {
   local target="$1"
-  "$PYTHON_CMD" - <<PY > "$target"
+  local app_id="$2"
+  FIREBASE_APP_ID_VALUE="$app_id" "$PYTHON_CMD" - <<PY > "$target"
 import json
 import sys
 import os
@@ -63,6 +64,12 @@ json.dump({
     'SUPABASE_URL': os.environ['SUPABASE_URL'],
     'SUPABASE_ANON_KEY': os.environ['SUPABASE_ANON_KEY'],
     'TRUXIFY_API_BASE_URL': os.environ['TRUXIFY_API_BASE_URL'],
+    'FIREBASE_API_KEY': os.environ['FIREBASE_API_KEY'],
+    'FIREBASE_APP_ID': os.environ['FIREBASE_APP_ID_VALUE'],
+    'FIREBASE_MESSAGING_SENDER_ID': os.environ['FIREBASE_MESSAGING_SENDER_ID'],
+    'FIREBASE_PROJECT_ID': os.environ['FIREBASE_PROJECT_ID'],
+    'FIREBASE_STORAGE_BUCKET': os.environ.get('FIREBASE_STORAGE_BUCKET', ''),
+    'FIREBASE_AUTH_DOMAIN': os.environ.get('FIREBASE_AUTH_DOMAIN', ''),
 }, sys.stdout, indent=2)
 PY
 }
@@ -70,9 +77,14 @@ PY
 export SUPABASE_URL="${env[SUPABASE_URL]}"
 export SUPABASE_ANON_KEY="${env[SUPABASE_ANON_KEY]}"
 export TRUXIFY_API_BASE_URL="${env[TRUXIFY_API_BASE_URL]}"
+export FIREBASE_API_KEY="${env[FIREBASE_API_KEY]}"
+export FIREBASE_MESSAGING_SENDER_ID="${env[FIREBASE_MESSAGING_SENDER_ID]}"
+export FIREBASE_PROJECT_ID="${env[FIREBASE_PROJECT_ID]}"
+export FIREBASE_STORAGE_BUCKET="${env[FIREBASE_STORAGE_BUCKET]:-}"
+export FIREBASE_AUTH_DOMAIN="${env[FIREBASE_AUTH_DOMAIN]:-}"
 
-write_json "$CUSTOMER_FILE"
-write_json "$DRIVER_FILE"
+write_json "$CUSTOMER_FILE" "${env[FIREBASE_CUSTOMER_APP_ID]}"
+write_json "$DRIVER_FILE" "${env[FIREBASE_DRIVER_APP_ID]}"
 
 echo "Generated dart-define files:"
 echo " - $CUSTOMER_FILE"

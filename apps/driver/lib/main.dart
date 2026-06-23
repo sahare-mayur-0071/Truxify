@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app.dart';
+import 'core/firebase_config.dart';
 import 'core/supabase_config.dart';
 
 Future<void> main() async {
@@ -12,16 +13,24 @@ Future<void> main() async {
   // Initialize Firebase.
   try {
     if (kIsWeb) {
-      await Firebase.initializeApp(
-        options: const FirebaseOptions(
-          apiKey: 'REDACTED_FIREBASE_API_KEY',
-          appId: 'REDACTED_DRIVER_APP_ID',
-          messagingSenderId: 'REDACTED_SENDER_ID',
-          projectId: 'truxify-auth-prod',
-          storageBucket: 'REDACTED_STORAGE_BUCKET',
-          authDomain: 'REDACTED_AUTH_DOMAIN',
-        ),
-      );
+      if (!FirebaseConfig.isConfigured) {
+        debugPrint(
+          'Firebase credentials not provided via --dart-define. '
+          'Skipping Firebase web initialization.',
+        );
+      } else {
+        await Firebase.initializeApp(
+          options: FirebaseOptions(
+            apiKey: FirebaseConfig.apiKey,
+            appId: FirebaseConfig.appId,
+            messagingSenderId: FirebaseConfig.messagingSenderId,
+            projectId: FirebaseConfig.projectId,
+            storageBucket: FirebaseConfig.storageBucket,
+            authDomain: FirebaseConfig.authDomain,
+          ),
+        );
+      }
+
     } else {
       await Firebase.initializeApp();
     }
