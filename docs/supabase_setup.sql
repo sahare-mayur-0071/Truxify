@@ -1506,9 +1506,11 @@ end;
 $$;
 
 -- ────────────────────────────────────────────────────────────────────────────
--- RPC 4: complete_trip_tx (overload) — Complete an order and release payment using order ID
+-- RPC 4: complete_trip_tx (overload) — Atomically verify delivery and release payment
 -- ────────────────────────────────────────────────────────────────────────────
-create or replace function complete_trip_tx(p_order_id uuid)
+drop function if exists complete_trip_tx(uuid);
+
+create or replace function complete_trip_tx(p_order_id uuid, p_otp_id uuid)
 returns void
 language plpgsql
 security definer
@@ -1517,8 +1519,9 @@ declare
   v_order record;
   v_trip_display_id text;
   v_active_trip_count int;
+  v_otp_updated int;
 begin
-  select * into v_order from orders where id = p_order_id;
+  select * into v_order from orders where id = p_order_id for update;
 
   if not found then
     raise exception 'Order not found';
@@ -1531,6 +1534,19 @@ begin
   -- Idempotency guard: check if the order status is already payment_released
   if v_order.status = 'payment_released' then
     return;
+  end if;
+
+  update delivery_otps
+  set verified = true,
+      verified_at = now()
+  where id = p_otp_id
+    and order_id = p_order_id
+    and verified = false
+    and expires_at >= now();
+
+  get diagnostics v_otp_updated = row_count;
+  if v_otp_updated <> 1 then
+    raise exception 'Delivery OTP is invalid, expired, or already verified';
   end if;
 
   -- Safe lookup for the driver's active trip
@@ -1570,8 +1586,7 @@ begin
 
   -- Update order status to payment_released
   update orders
-  set otp_verified = true,
-      status = 'payment_released',
+  set status = 'payment_released',
       updated_at = now()
   where id = p_order_id;
 

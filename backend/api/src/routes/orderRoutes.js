@@ -23,7 +23,7 @@ import { awardReputationPoints } from '../services/reputation.js';
 import { predictDemand, predictPrice } from '../services/ml.js';
 import { changeDropSchema, cancelOrderSchema } from '../validation/requestSchemas.js';
 import { buildDepositTx, recordDepositTx, escrowRelease, escrowRefund, ESCROW_MATIC_PER_PAISA } from '../services/escrow.js';
-import { sendDeliveryOtpNotification, storeDeliveryOtp, getActiveDeliveryOtp, verifyDeliveryOtp, expireDeliveryOtps } from '../services/notificationService.js';
+import { sendDeliveryOtpNotification, storeDeliveryOtp, getActiveDeliveryOtp, expireDeliveryOtps } from '../services/notificationService.js';
 import logger from '../middleware/logger.js';
 
 const router = express.Router();
@@ -883,10 +883,7 @@ router.post('/:id/verify-delivery', authenticate, userLimiter, requireRole(['dri
       return res.status(400).json({ error: message });
     }
 
-    // Successful verification — clear failure state
-    await clearOtpState(orderId);
-    await verifyDeliveryOtp(orderId);
-
+    // Guard against cancellation or a previous successful verification.
     const { data: preUpdatedOrder, error: updateErr } = await supabase.from('orders').update({
       updated_at: new Date().toISOString()
     })
@@ -904,12 +901,17 @@ router.post('/:id/verify-delivery', authenticate, userLimiter, requireRole(['dri
     }
 
     // Call complete_trip_tx RPC to atomically update trip, driver stats, wallet, earnings, order status, and timeline.
-    const { error: rpcErr } = await supabase.rpc('complete_trip_tx', { p_order_id: orderId });
+    const { error: rpcErr } = await supabase.rpc('complete_trip_tx', {
+      p_order_id: orderId,
+      p_otp_id: otpRecord.id,
+    });
     if (rpcErr) {
       logger.error('complete_trip_tx RPC failed:', rpcErr.message);
       return res.status(500).json({ error: 'Failed to complete trip and release payment.', details: rpcErr.message });
     }
 
+    // Clear brute-force state only after the OTP and trip transaction commits.
+    await clearOtpState(orderId);
 
     // Escrow: release funds to driver after successful delivery verification
     if (order.escrow_status === 'funded') {
