@@ -11,6 +11,8 @@ import {
 import { supabase } from '../config/db.js';
 import { ProfileModel } from '../models/ProfileModel.js';
 import { invalidateCachedProfile, invalidateCachedSupabaseProfile } from '../lib/profileCache.js';
+import { validateBody } from '../middleware/validate.js';
+import { updateProfileSchema } from '../validation/requestSchemas.js';
 
 const router = express.Router();
 
