@@ -145,7 +145,7 @@ function generateOrderDisplayId() {
   const prefix = '#FF';
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
-  const random = Math.floor(1000 + Math.random() * 9000); // 4 random digits
+  const random = Math.floor(100000 + Math.random() * 900000); // 6 random digits
   return `${prefix}${dateStr}${random}`;
 }
 
@@ -709,7 +709,7 @@ router.post('/:id/bids/:bidId/accept', authenticate, userLimiter, requireRole(['
           return res.status(400).json({ error: 'Computed escrow amount exceeds safety cap. Check ESCROW_MATIC_PER_PAISA configuration.' });
         }
         const amountWei = ethers.parseEther(maticAmount);
-        const { txData } = await buildDepositTx(
+        const { txData, bookingId } = await buildDepositTx(
           order.order_display_id, customerWallet, driverWallet, amountWei,
         );
         if (txData) {
@@ -731,7 +731,7 @@ router.post('/:id/bids/:bidId/accept', authenticate, userLimiter, requireRole(['
             depositTxData = txData;
           }
           await supabase.from('orders').update({
-            escrow_booking_id: `escrow:${order.order_display_id}`,
+            escrow_booking_id: bookingId,
             escrow_status: 'funding',
           }).eq('id', orderId);
         }
@@ -851,8 +851,6 @@ router.post('/:id/verify-delivery', authenticate, userLimiter, requireRole(['dri
   const orderId = req.params.id;
   const { otp } = req.body;
 
-  if (!otp) return res.status(400).json({ error: 'OTP is required for verification.' });
-
   // Check for active lockout from previous failed attempts
   if (await checkOtpLockout(orderId)) {
     return res.status(429).json({
@@ -883,10 +881,6 @@ router.post('/:id/verify-delivery', authenticate, userLimiter, requireRole(['dri
       return res.status(400).json({ error: message });
     }
 
-    // Successful verification — clear failure state
-    await clearOtpState(orderId);
-    await verifyDeliveryOtp(orderId);
-
     const { data: preUpdatedOrder, error: updateErr } = await supabase.from('orders').update({
       updated_at: new Date().toISOString()
     })
@@ -910,8 +904,11 @@ router.post('/:id/verify-delivery', authenticate, userLimiter, requireRole(['dri
       return res.status(500).json({ error: 'Failed to complete trip and release payment.', details: rpcErr.message });
     }
 
-
+    // OTP is only consumed after the RPC succeeds — if the RPC fails the driver can retry
+    await verifyDeliveryOtp(orderId);
+    await clearOtpState(orderId);
     // Escrow: release funds to driver after successful delivery verification
+    let escrowReleased = false;
     if (order.escrow_status === 'funded') {
       try {
         const { txHash } = await escrowRelease(order.order_display_id);
@@ -940,6 +937,7 @@ router.post('/:id/verify-delivery', authenticate, userLimiter, requireRole(['dri
               );
             }
           }
+          escrowReleased = true;
         }
       } catch (releaseErr) {
         logger.error('[escrow] Release failed for order', orderId, ':', releaseErr.message);
@@ -948,7 +946,11 @@ router.post('/:id/verify-delivery', authenticate, userLimiter, requireRole(['dri
       logger.info(`[escrow] Escrow not funded (status: ${order.escrow_status}) — skipping on-chain release.`);
     }
 
-    res.json({ message: 'Delivery verified successfully! Payment released to driver.' });
+    if (order.escrow_status !== 'funded' || escrowReleased) {
+      res.json({ message: 'Delivery verified successfully! Payment released to driver.' });
+    } else {
+      res.status(500).json({ error: 'Delivery verified but on-chain escrow release failed. Contact support.' });
+    }
   } catch (err) {
     res.status(500).json({ error: 'Internal Server Error' });
   }
@@ -1199,16 +1201,21 @@ router.post('/:id/confirm-deposit', authenticate, userLimiter, requireRole(['cus
       return res.status(400).json({ error: 'Order is not in funding state' });
     }
 
-    const bookingId = `escrow:${order.order_display_id}`;
+    const bookingId = order.escrow_booking_id || `escrow:${order.order_display_id}`;
     const result = await recordDepositTx(bookingId, txHash);
 
     if (result.error) return res.status(422).json({ error: result.error });
 
-    await supabase.from('orders').update({
+    const { error: updateErr } = await supabase.from('orders').update({
       escrow_status: 'funded',
       deposit_tx_hash: result.txHash,
       escrow_deposited_at: new Date().toISOString(),
     }).eq('id', orderId);
+
+    if (updateErr) {
+      logger.error('[confirm-deposit] DB update failed:', updateErr.message);
+      return res.status(500).json({ error: 'Database update failed after deposit confirmation. Please contact support.' });
+    }
 
     res.json({ message: 'Escrow deposit confirmed', txHash: result.txHash });
   } catch (err) {

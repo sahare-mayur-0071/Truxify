@@ -52,7 +52,7 @@ export const createOrderSchema = z.object({
   special_requirements: z.string().max(500).optional().nullable(),
   payment_method_id: z.string().optional(),
   upi_id: z.string().regex(upiRegex, "Invalid UPI ID format").optional().or(z.literal('')).nullable()
-}).strict();
+}).passthrough();
 
 export const paramIdSchema = z.object({
   id: uuidSchema.or(z.string().min(1, "ID is required"))
@@ -135,13 +135,6 @@ export const updateWalletSchema = z.object({
     /^0x[a-fA-F0-9]{40}$/,
     'Must be a valid 0x-prefixed 42-character wallet address'
   ),
-}).strict();
-
-export const updateProfileSchema = z.object({
-  full_name: z.string().min(1, "Name is required").max(255, "Name is too long").optional(),
-  language: z.string().max(50, "Language is too long").optional(),
-  dark_mode: z.boolean().optional(),
-  is_online: z.boolean().optional(),
 }).strict();
 
 export const registerDeviceSchema = z.object({
