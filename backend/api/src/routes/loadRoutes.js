@@ -3,6 +3,7 @@ import { supabase } from '../config/db.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { userLimiter } from '../middleware/rateLimiter.js';
 import logger from '../middleware/logger.js';
+import { loadFilterQuerySchema } from '../validation/loadSchemas.js';
 
 const router = express.Router();
 
@@ -12,6 +13,18 @@ const router = express.Router();
 // ============================================================================
 router.get('/', authenticate, userLimiter, requireRole(['driver']), async (req, res) => {
   try {
+    const filterResult = loadFilterQuerySchema.safeParse(req.query);
+    if (!filterResult.success) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: filterResult.error.issues.map(issue => ({
+          field: issue.path.join('.') || 'query',
+          message: issue.message,
+        })),
+      });
+    }
+    const filters = filterResult.data;
+
     const pageVal = req.query.page || '1';
     const limitVal = req.query.limit || '10';
 
@@ -82,38 +95,16 @@ router.get('/', authenticate, userLimiter, requireRole(['driver']), async (req, 
     if (req.query.goods_type) {
       query = query.eq('goods_type', req.query.goods_type);
     }
-    if (req.query.min_price) {
-      const minPriceStr = String(req.query.min_price);
-      const min = parseFloat(minPriceStr);
-      if (isNaN(min) || min < 0 || minPriceStr !== String(min)) {
-        return res.status(400).json({ error: 'min_price must be a non-negative number without trailing characters' });
-      }
+    if (filters.min_price !== undefined) {
       // Map min_price (in Rupees) to freight_value (in paisa)
-      query = query.gte('freight_value', Math.round(min * 100));
+      query = query.gte('freight_value', Math.round(filters.min_price * 100));
     }
-    if (req.query.max_price) {
-      const maxPriceStr = String(req.query.max_price);
-      const max = parseFloat(maxPriceStr);
-      if (isNaN(max) || max < 0 || maxPriceStr !== String(max)) {
-        return res.status(400).json({ error: 'max_price must be a non-negative number without trailing characters' });
-      }
+    if (filters.max_price !== undefined) {
       // Map max_price (in Rupees) to freight_value (in paisa)
-      query = query.lte('freight_value', Math.round(max * 100));
+      query = query.lte('freight_value', Math.round(filters.max_price * 100));
     }
-    if (req.query.min_price && req.query.max_price) {
-      const min = parseFloat(String(req.query.min_price));
-      const max = parseFloat(String(req.query.max_price));
-      if (!isNaN(min) && !isNaN(max) && min > max) {
-        return res.status(400).json({ error: 'min_price cannot be greater than max_price' });
-      }
-    }
-    if (req.query.distance) {
-      const distStr = String(req.query.distance);
-      const maxDistance = parseFloat(distStr);
-      if (isNaN(maxDistance) || maxDistance < 0 || distStr !== String(maxDistance)) {
-        return res.status(400).json({ error: 'distance must be a non-negative number without trailing characters' });
-      }
-      query = query.lte('extra_distance_km', maxDistance);
+    if (filters.distance !== undefined) {
+      query = query.lte('extra_distance_km', filters.distance);
     }
 
     // Sorting
