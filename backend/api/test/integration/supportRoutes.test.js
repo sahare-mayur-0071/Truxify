@@ -536,6 +536,8 @@ describe('Support Routes', () => {
       expect(res.body.categories).toContain('account');
       expect(res.body.labels).toBeDefined();
       expect(typeof res.body.labels.payment).toBe('string');
+      expect(res.body.sla_hours).toBeDefined();
+      expect(res.body.sla_hours.payment).toBe(24);
     });
 
     it('categories array contains no duplicates', async () => {

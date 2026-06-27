@@ -72,10 +72,19 @@ const CATEGORY_LABELS = {
   account: 'Account Management',
 };
 
+const CATEGORY_SLA = {
+  payment: 24,
+  order: 12,
+  technical: 4,
+  general: 48,
+  account: 24,
+};
+
 router.get('/categories', (_req, res) => {
   res.json({
     categories: VALID_CATEGORIES,
     labels: CATEGORY_LABELS,
+    sla_hours: CATEGORY_SLA,
   });
 });
 
