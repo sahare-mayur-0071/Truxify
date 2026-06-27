@@ -51,8 +51,13 @@ export const createOrderSchema = z.object({
   is_fragile: z.boolean().default(false).optional(),
   special_requirements: z.string().max(500).optional().nullable(),
   payment_method_id: z.string().optional(),
-  upi_id: z.string().regex(upiRegex, "Invalid UPI ID format").optional().or(z.literal('')).nullable()
-}).passthrough();
+  upi_id: z.string().regex(upiRegex, "Invalid UPI ID format").optional().or(z.literal('')).nullable(),
+  base_freight: z.any().optional(),
+  toll_estimate: z.any().optional(),
+  platform_fee: z.any().optional(),
+  total_amount: z.any().optional(),
+  estimated_price: z.any().optional(),
+}).strict();
 
 export const paramIdSchema = z.object({
   id: uuidSchema
@@ -170,6 +175,10 @@ export const updateTicketSchema = z.object({
   }).optional(),
 }).strict();
 
+export const createTicketCommentSchema = z.object({
+  message: z.string().transform((v) => v.trim()).pipe(
+    z.string().min(1, 'Message is required').max(1000, 'Message must be 1000 characters or fewer')
+  )
 export const driverStatementSchema = z.object({
   start_date: z.string().refine(value => !Number.isNaN(Date.parse(value)), {
     message: 'Must be a valid date string',
