@@ -4,7 +4,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../core/driver_session.dart';
 
 class TripService {
   TripService({
@@ -27,9 +26,9 @@ class TripService {
   SupabaseClient get _client => _providedClient ?? Supabase.instance.client;
 
   String get _driverId {
-    final id = DriverSession.driverId;
-    if (id.isEmpty) throw Exception('Driver session not initialised');
-    return id;
+    final user = _client.auth.currentUser;
+    if (user == null) throw Exception('Driver not authenticated');
+    return user.id;
   }
 
   static String _normalizeBaseUrl(String value) {
@@ -38,10 +37,11 @@ class TripService {
 
   Future<Map<String, String>> _authHeaders() async {
     final accessToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+    final userId = _client.auth.currentUser?.id ?? '';
     return <String, String>{
       'Content-Type': 'application/json',
       if (accessToken != null) 'Authorization': 'Bearer $accessToken',
-      'x-user-id': _driverId,
+      'x-user-id': userId,
       'x-user-role': 'driver',
     };
   }
@@ -73,6 +73,33 @@ class TripService {
 
     final body = jsonDecode(response.body);
     return List<Map<String, dynamic>>.from(body as List);
+  }
+
+  Future<Map<String, dynamic>> fetchTripHistory({
+    String? cursor,
+    int limit = 20,
+    String? status,
+  }) async {
+    var uriString = '$_apiBaseUrl/api/trips/history?limit=$limit';
+    if (status != null) {
+      uriString += '&status=${Uri.encodeQueryComponent(status)}';
+    }
+    if (cursor != null) {
+      uriString += '&cursor=${Uri.encodeQueryComponent(cursor)}';
+    }
+    final uri = Uri.parse(uriString);
+    final response = await _httpClient.get(uri, headers: await _authHeaders());
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError('Failed to fetch trip history');
+    }
+
+    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    return {
+      'trips': List<Map<String, dynamic>>.from(body['trips'] as List? ?? []),
+      'nextCursor': body['nextCursor'] as String?,
+      'hasMore': body['hasMore'] as bool? ?? false,
+    };
   }
 
   Future<List<Map<String, dynamic>>> fetchTripItems(

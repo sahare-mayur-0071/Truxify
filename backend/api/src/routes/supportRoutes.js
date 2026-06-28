@@ -3,13 +3,25 @@ import { supabase } from '../config/db.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { userLimiter } from '../middleware/rateLimiter.js';
 import { validateBody } from '../middleware/validate.js';
-import { createTicketSchema, updateTicketSchema } from '../validation/requestSchemas.js';
+import { createTicketSchema, updateTicketSchema, createTicketCommentSchema } from '../validation/requestSchemas.js';
 
 const router = express.Router();
 
 const FAQ_COLUMNS = 'id, question, answer, app_type, sort_order';
 const TICKET_COLUMNS = 'id, subject, description, category, status, created_at, updated_at';
 const TICKET_DETAIL_COLUMNS = 'id, user_id, subject, description, category, status, created_at, updated_at';
+
+// Canonical map of all accepted category aliases -> database values.
+// Shared by ticket creation, ticket update, and the categories endpoint.
+const CATEGORY_MAP = {
+  billing: 'payment',
+  booking: 'order',
+  payment: 'payment',
+  order: 'order',
+  technical: 'technical',
+  general: 'general',
+  account: 'account',
+};
 
 function normalizeRequiredText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -48,29 +60,50 @@ router.get('/faqs', async (req, res) => {
 });
 
 // ============================================================================
-// 2. CREATE SUPPORT TICKET (AUTHENTICATED USER)
+// 2. LIST VALID TICKET CATEGORIES (PUBLIC)
+// ============================================================================
+const VALID_CATEGORIES = [...new Set(Object.values(CATEGORY_MAP))];
+
+const CATEGORY_LABELS = {
+  payment: 'Payment & Billing',
+  order: 'Order & Booking',
+  technical: 'Technical Issue',
+  general: 'General Enquiry',
+  account: 'Account Management',
+};
+
+const CATEGORY_SLA = {
+  payment: 24,
+  order: 12,
+  technical: 4,
+  general: 48,
+  account: 24,
+};
+
+const CATEGORY_DESCRIPTIONS = {
+  payment: 'Issues related to payments, invoices, billing, and refunds.',
+  order: 'Issues related to load bookings, orders, and shipment tracking.',
+  technical: 'App crashes, bugs, and technical difficulties.',
+  general: 'General questions and inquiries.',
+  account: 'Login problems, account settings, and profile access.',
+};
+
+router.get('/categories', (_req, res) => {
+  res.json({
+    categories: VALID_CATEGORIES,
+    labels: CATEGORY_LABELS,
+    sla_hours: CATEGORY_SLA,
+    descriptions: CATEGORY_DESCRIPTIONS,
+  });
+});
+
+// ============================================================================
+// 3. CREATE SUPPORT TICKET (AUTHENTICATED USER)
 // ============================================================================
 router.post('/tickets', authenticate, userLimiter, validateBody(createTicketSchema), async (req, res) => {
   const subject = normalizeRequiredText(req.body.subject);
   const category = normalizeRequiredText(req.body.category);
   const description = normalizeRequiredText(req.body.description) || subject;
-
-  if (!subject || !category) {
-    return res.status(400).json({
-      error: 'subject and category are required.',
-    });
-  }
-
-  // Map user-friendly/frontend categories to database-constrained values
-  const CATEGORY_MAP = {
-    billing: 'payment',
-    booking: 'order',
-    payment: 'payment',
-    order: 'order',
-    technical: 'technical',
-    general: 'general',
-    account: 'account'
-  };
 
   const normalizedCategory = category.toLowerCase();
   const dbCategory = CATEGORY_MAP[normalizedCategory] || 'general';
@@ -105,7 +138,7 @@ router.post('/tickets', authenticate, userLimiter, validateBody(createTicketSche
 });
 
 // ============================================================================
-// 3. LIST CURRENT USER'S SUPPORT TICKETS (AUTHENTICATED USER)
+// 4. LIST CURRENT USER'S SUPPORT TICKETS (AUTHENTICATED USER)
 // ============================================================================
 router.get('/tickets', authenticate, userLimiter, async (req, res) => {
   const { status, category, page = '1', limit = '20' } = req.query;
@@ -153,7 +186,7 @@ router.get('/tickets', authenticate, userLimiter, async (req, res) => {
 });
 
 // ============================================================================
-// 4. GET SINGLE SUPPORT TICKET (AUTHENTICATED USER - OWNER)
+// 5. GET SINGLE SUPPORT TICKET (AUTHENTICATED USER - OWNER)
 // ============================================================================
 router.get('/tickets/:id', authenticate, userLimiter, async (req, res) => {
   const ticketId = req.params.id;
@@ -187,7 +220,7 @@ router.get('/tickets/:id', authenticate, userLimiter, async (req, res) => {
 });
 
 // ============================================================================
-// 5. UPDATE SUPPORT TICKET (AUTHENTICATED USER - OWNER OR ADMIN)
+// 6. UPDATE SUPPORT TICKET (AUTHENTICATED USER - OWNER OR ADMIN)
 // ============================================================================
 router.patch('/tickets/:id', authenticate, userLimiter, validateBody(updateTicketSchema), async (req, res) => {
   const ticketId = req.params.id;
@@ -219,24 +252,14 @@ router.patch('/tickets/:id', authenticate, userLimiter, validateBody(updateTicke
       return res.status(400).json({ error: 'Cannot update a closed ticket.' });
     }
 
-    const VALID_STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
-    const CATEGORY_MAP = {
-      billing: 'payment', booking: 'order', payment: 'payment',
-      order: 'order', technical: 'technical', general: 'general', account: 'account',
-    };
-
     const updates = { updated_at: new Date().toISOString() };
 
     if (subject !== undefined) {
-      const trimmed = typeof subject === 'string' ? subject.trim() : '';
-      if (!trimmed) {
-        return res.status(400).json({ error: 'subject cannot be empty.' });
-      }
-      updates.subject = trimmed;
+      updates.subject = subject.trim();
     }
 
     if (description !== undefined) {
-      updates.description = typeof description === 'string' ? description.trim() : '';
+      updates.description = description.trim();
     }
 
     if (category !== undefined) {
@@ -247,16 +270,11 @@ router.patch('/tickets/:id', authenticate, userLimiter, validateBody(updateTicke
 
     if (status !== undefined) {
       const normalizedStatus = status.toLowerCase().trim();
-      if (!VALID_STATUSES.includes(normalizedStatus)) {
-        return res.status(400).json({
-          error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`,
-        });
-      }
       const USER_ALLOWED_STATUSES = ['closed'];
       if (req.user.role !== 'admin' && normalizedStatus !== ticket.status) {
         if (!USER_ALLOWED_STATUSES.includes(normalizedStatus)) {
           return res.status(403).json({
-            error: 'Access Denied: Only admins can change tickets to this status.',
+            error: 'Access Denied: Only admins can change ticket status.',
           });
         }
       }
@@ -287,7 +305,7 @@ router.patch('/tickets/:id', authenticate, userLimiter, validateBody(updateTicke
 });
 
 // ============================================================================
-// 6. LIST ALL TICKETS (ADMIN ONLY)
+// 7. LIST ALL TICKETS (ADMIN ONLY)
 // ============================================================================
 router.get('/admin/tickets', authenticate, userLimiter, requireRole(['admin']), async (req, res) => {
   const { status, category, user_id, page = '1', limit = '20' } = req.query;
@@ -332,6 +350,116 @@ router.get('/admin/tickets', authenticate, userLimiter, requireRole(['admin']), 
         totalPages: count ? Math.ceil(count / limitNum) : 0,
       },
     });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ============================================================================
+// 7. CREATE A COMMENT/REPLY ON A TICKET (CUSTOMER OR DRIVER OWNER OR ADMIN)
+// ============================================================================
+router.post('/tickets/:id/comments', authenticate, userLimiter, validateBody(createTicketCommentSchema), async (req, res) => {
+  const ticketId = req.params.id;
+  const { message } = req.body;
+
+  try {
+    const { data: ticket, error: fetchError } = await supabase
+      .from('support_tickets')
+      .select('id, user_id')
+      .eq('id', ticketId)
+      .maybeSingle();
+
+    if (fetchError) {
+      return res.status(500).json({
+        error: 'Failed to fetch support ticket.',
+        details: fetchError.message,
+      });
+    }
+
+    if (!ticket) {
+      return res.status(404).json({ error: 'Support ticket not found.' });
+    }
+
+    if (ticket.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Access Denied: You do not own this ticket.' });
+    }
+
+    const { data: comment, error: insertError } = await supabase
+      .from('support_ticket_comments')
+      .insert({
+        ticket_id: ticketId,
+        user_id: req.user.id,
+        user_name: req.user.name || 'Anonymous',
+        message: message.trim(),
+        created_at: new Date().toISOString()
+      })
+      .select('id, ticket_id, user_id, user_name, message, created_at')
+      .single();
+
+    if (insertError) {
+      return res.status(500).json({
+        error: 'Failed to add comment.',
+        details: insertError.message,
+      });
+    }
+
+    res.status(201).json({
+      message: 'Comment added successfully.',
+      comment,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ============================================================================
+// 8. GET ALL COMMENTS/REPLIES FOR A TICKET (CUSTOMER OR DRIVER OWNER OR ADMIN)
+// ============================================================================
+router.get('/tickets/:id/comments', authenticate, userLimiter, async (req, res) => {
+  const ticketId = req.params.id;
+  const { sort } = req.query;
+  const isAscending = sort !== 'desc';
+
+  try {
+    const { data: ticket, error: fetchError } = await supabase
+      .from('support_tickets')
+      .select('id, user_id')
+      .eq('id', ticketId)
+      .maybeSingle();
+
+    if (fetchError) {
+      return res.status(500).json({
+        error: 'Failed to fetch support ticket.',
+        details: fetchError.message,
+      });
+    }
+
+    if (!ticket) {
+      return res.status(404).json({ error: 'Support ticket not found.' });
+    }
+
+    if (ticket.user_id !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Access Denied: You do not own this ticket.' });
+    }
+
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 100));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const { data: comments, error: commentsError } = await supabase
+      .from('support_ticket_comments')
+      .select('id, ticket_id, user_id, user_name, message, created_at')
+      .eq('ticket_id', ticketId)
+      .order('created_at', { ascending: true })
+      .range(offset, offset + limit - 1);
+
+    if (commentsError) {
+      return res.status(500).json({
+        error: 'Failed to fetch comments.',
+        details: commentsError.message,
+      });
+    }
+
+    res.json(comments || []);
   } catch (err) {
     res.status(500).json({ error: 'Internal Server Error' });
   }

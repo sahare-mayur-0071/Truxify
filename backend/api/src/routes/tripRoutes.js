@@ -186,7 +186,116 @@ router.post('/events/batch', authenticate, userLimiter, validateBatchPayload(bat
 });
 
 // ============================================================================
-// 🚀 ADDITIONAL TRIP ROUTES CAN BE ADDED BELOW
+// GET TRIP EVENTS (DRIVER, CUSTOMER, OR ADMIN)
 // ============================================================================
+/**
+ * GET /api/trips/:id/events
+ *
+ * Returns all telemetry/milestone events for a given trip, ordered
+ * chronologically.
+ *
+ * Access control:
+ *   - The trip's driver (trip_events.user_id === req.user.id)
+ *   - The order's customer (orders.customer_id === req.user.id)
+ *   - Any admin
+ *
+ * Optional query param: ?type=gpsUpdate  (filters by event_type)
+ */
+router.get('/:id/events', authenticate, userLimiter, async (req, res) => {
+  const tripId = req.params.id;
+  const { type, sort } = req.query;
+  const isAscending = sort !== 'desc';
+  const { type, min_lat, max_lat, min_lng, max_lng } = req.query;
+
+  try {
+    // 1. Fetch the trip to determine the driver
+    const { data: events, error: eventsErr } = await supabase
+      .from('trip_events')
+      .select('event_id, user_id, trip_id, event_type, event_timestamp, latitude, longitude, metadata, created_at')
+      .eq('trip_id', tripId)
+      .order('event_timestamp', { ascending: isAscending });
+
+    if (eventsErr) {
+      return res.status(500).json({ error: 'Failed to fetch trip events.', details: eventsErr.message });
+    }
+
+    if (!events || events.length === 0) {
+      // Check if the trip even exists
+      const { data: existingEvent } = await supabase
+        .from('trip_events')
+        .select('trip_id')
+        .eq('trip_id', tripId)
+        .limit(1)
+        .maybeSingle();
+
+      // If no events found at all, check via orders whether this trip/order exists
+      const { data: order } = await supabase
+        .from('orders')
+        .select('id, driver_id, customer_id')
+        .eq('id', tripId)
+        .maybeSingle();
+
+      if (!order && !existingEvent) {
+        return res.status(404).json({ error: 'Trip not found.' });
+      }
+
+      // Authorisation check even for empty trips
+      if (req.user.role !== 'admin') {
+        const isDriver = order?.driver_id === req.user.id;
+        const isCustomer = order?.customer_id === req.user.id;
+        if (!isDriver && !isCustomer) {
+          return res.status(403).json({ error: 'Access Denied: You are not authorised to view events for this trip.' });
+        }
+      }
+
+      return res.json({ trip_id: tripId, events: [] });
+    }
+
+    // 2. Determine trip's driver from the first event's user_id (the driver who uploaded events)
+    const driverUserId = events[0]?.user_id;
+
+    // 3. Also look up the linked order to check customer access
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, driver_id, customer_id')
+      .eq('id', tripId)
+      .maybeSingle();
+
+    // 4. Access control
+    if (req.user.role !== 'admin') {
+      const isDriver = driverUserId === req.user.id || order?.driver_id === req.user.id;
+      const isCustomer = order?.customer_id === req.user.id;
+      if (!isDriver && !isCustomer) {
+        return res.status(403).json({ error: 'Access Denied: You are not authorised to view events for this trip.' });
+      }
+    }
+
+    // 5. Optional type filter
+    let filteredEvents = events;
+    if (type && typeof type === 'string') {
+      filteredEvents = events.filter(e => e.event_type === type);
+    }
+
+    if (min_lat !== undefined || max_lat !== undefined || min_lng !== undefined || max_lng !== undefined) {
+      filteredEvents = filteredEvents.filter(e => {
+        if (e.latitude === null || e.longitude === null || e.latitude === undefined || e.longitude === undefined) return false;
+        const lat = Number(e.latitude);
+        const lng = Number(e.longitude);
+        if (min_lat !== undefined && lat < Number(min_lat)) return false;
+        if (max_lat !== undefined && lat > Number(max_lat)) return false;
+        if (min_lng !== undefined && lng < Number(min_lng)) return false;
+        if (max_lng !== undefined && lng > Number(max_lng)) return false;
+        return true;
+      });
+    }
+
+    return res.json({
+      trip_id: tripId,
+      events: filteredEvents,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Internal Server Error', details: err.message });
+  }
+});
 
 export default router;

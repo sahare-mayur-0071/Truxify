@@ -327,9 +327,8 @@ describe('Profile Routes', () => {
         });
 
       expect(res.status).toBe(400);
-      expect(res.body).toEqual({
-        error: 'Invalid wallet address',
-      });
+      expect(res.body.error).toBe('Validation failed');
+      expect(res.body.details[0].field).toBe('wallet_address');
     });
 
     it('returns 409 conflict when wallet address is already taken', async () => {
@@ -372,6 +371,145 @@ describe('Profile Routes', () => {
       expect(res.body.error).toBe('This wallet address is already registered to another account.');
 
       m.supabase.from = originalFrom;
+    });
+  });
+
+  describe('GET /api/profile/driver/statement', () => {
+    beforeEach(() => {
+      m.store.orders = [];
+    });
+
+    it('returns 403 for non-driver role', async () => {
+      const res = await request(buildApp())
+        .get('/api/profile/driver/statement')
+        .set(CUSTOMER_HEADERS);
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns empty list and summary when no trips exist', async () => {
+      const res = await request(buildApp())
+        .get('/api/profile/driver/statement')
+        .set(DRIVER_HEADERS);
+
+      expect(res.status).toBe(200);
+      expect(res.body.summary).toEqual({
+        total_trips: 0,
+        total_base_freight: 0,
+        total_platform_fees: 0,
+        total_toll_estimate: 0,
+        total_net_earnings: 0
+      });
+      expect(res.body.trips).toEqual([]);
+    });
+
+    it('filters trips and aggregates earnings for the driver', async () => {
+      m.store.orders.push(
+        {
+          id: 'order-1',
+          driver_id: 'driver-uuid-456',
+          status: 'payment_released',
+          pickup_address: 'A',
+          drop_address: 'B',
+          pickup_date: '2026-06-01',
+          base_freight: 10000,
+          platform_fee: 500,
+          toll_estimate: 1500
+        },
+        {
+          id: 'order-2',
+          driver_id: 'driver-uuid-456',
+          status: 'delivered',
+          pickup_address: 'C',
+          drop_address: 'D',
+          pickup_date: '2026-06-05',
+          base_freight: 20000,
+          platform_fee: 1000,
+          toll_estimate: 2000
+        },
+        {
+          id: 'order-other-driver',
+          driver_id: 'other-driver',
+          status: 'payment_released',
+          pickup_address: 'E',
+          drop_address: 'F',
+          pickup_date: '2026-06-02',
+          base_freight: 15000,
+          platform_fee: 750,
+          toll_estimate: 1000
+        }
+      );
+
+      const res = await request(buildApp())
+        .get('/api/profile/driver/statement?start_date=2026-06-02')
+        .set(DRIVER_HEADERS);
+
+      expect(res.status).toBe(200);
+      expect(res.body.summary).toEqual({
+        total_trips: 1,
+        total_base_freight: 20000,
+        total_platform_fees: 1000,
+        total_toll_estimate: 2000,
+        total_net_earnings: 19000
+      });
+      expect(res.body.trips).toHaveLength(1);
+      expect(res.body.trips[0].id).toBe('order-2');
+    });
+
+    it('returns CSV formatting when format=csv is passed', async () => {
+      m.store.orders.push({
+        id: 'order-1',
+        driver_id: 'driver-uuid-456',
+        status: 'delivered',
+        pickup_address: 'A',
+        drop_address: 'B',
+        pickup_date: '2026-06-01',
+        base_freight: 10000,
+        platform_fee: 500,
+        toll_estimate: 1500
+      });
+
+      const res = await request(buildApp())
+        .get('/api/profile/driver/statement?format=csv')
+        .set(DRIVER_HEADERS);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.text).toContain('"order-1"');
+      expect(res.text).toContain('"10000"');
+    it('sorts statement trips by net earnings when sort_by=net_earnings is passed', async () => {
+      m.store.orders.push(
+        {
+          id: 'order-low-earn',
+          driver_id: 'driver-uuid-456',
+          status: 'delivered',
+          pickup_address: 'A',
+          drop_address: 'B',
+          pickup_date: '2026-06-01',
+          base_freight: 10000,
+          platform_fee: 1000,
+          toll_estimate: 0
+        },
+        {
+          id: 'order-high-earn',
+          driver_id: 'driver-uuid-456',
+          status: 'delivered',
+          pickup_address: 'C',
+          drop_address: 'D',
+          pickup_date: '2026-06-05',
+          base_freight: 30000,
+          platform_fee: 1000,
+          toll_estimate: 0
+        }
+      );
+
+      const res = await request(buildApp())
+        .get('/api/profile/driver/statement?sort_by=net_earnings')
+        .set(DRIVER_HEADERS);
+
+      expect(res.status).toBe(200);
+      expect(res.body.trips).toHaveLength(2);
+      expect(res.body.trips[0].id).toBe('order-high-earn');
     });
   });
 });
