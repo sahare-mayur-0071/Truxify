@@ -608,11 +608,9 @@ router.post('/:id/ratings', authenticate, userLimiter, requireRole(['customer'])
     const polygonAddress = driverDetails?.polygon_wallet_address ?? null;
 
     if (polygonAddress) {
-      try {
-        await awardReputationPoints(polygonAddress, stars);
-      } catch (repErr) {
+      awardReputationPoints(polygonAddress, stars).catch((repErr) => {
         logger.error('[reputation] On-chain reputation update failed:', repErr.message);
-      }
+      });
     } else {
       logger.warn(
         `[reputation] Driver ${order.driver_id} has no polygon_wallet_address — skipping on-chain update.`
