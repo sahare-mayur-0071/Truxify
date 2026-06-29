@@ -327,12 +327,37 @@ router.delete('/admin/cache/:userId', authenticate, requireRole(['admin']), asyn
       return res.status(400).json({ error: 'userId path parameter is required.' });
     }
 
+    let { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, firebase_uid')
+      .eq('id', targetUserId)
+      .maybeSingle();
+
+    if (!profile && !profileError) {
+      const firebaseLookup = await supabase
+        .from('profiles')
+        .select('id, firebase_uid')
+        .eq('firebase_uid', targetUserId)
+        .maybeSingle();
+
+      profile = firebaseLookup.data;
+      profileError = firebaseLookup.error;
+    }
+
+    if (profileError) {
+      return res.status(500).json({ error: 'Failed to resolve profile cache identity.', details: profileError.message });
+    }
+
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found.' });
+    }
+
     await Promise.all([
-      invalidateCachedProfile(targetUserId),
-      invalidateCachedSupabaseProfile(targetUserId),
+      profile.firebase_uid ? invalidateCachedProfile(profile.firebase_uid) : Promise.resolve(),
+      invalidateCachedSupabaseProfile(profile.id),
     ]);
 
-    return res.json({ success: true, message: `Cache invalidated for user ${targetUserId}.` });
+    return res.json({ success: true, message: `Cache invalidated for user ${profile.id}.` });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to invalidate profile cache.', details: err.message });
   }
