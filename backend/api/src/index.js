@@ -158,6 +158,27 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
+// ============================================================================
+// STRICT CONTENT-TYPE VALIDATION
+// ============================================================================
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+    const contentType = req.headers['content-type'];
+    if (!contentType) {
+      return res.status(415).json({ error: 'Content-Type header is required' });
+    }
+    
+    const isJson = contentType.includes('application/json');
+    const isUrlEncoded = contentType.includes('application/x-www-form-urlencoded');
+    const isMultipart = contentType.includes('multipart/form-data');
+    
+    if (!isJson && !isUrlEncoded && !isMultipart) {
+      return res.status(415).json({ error: 'Unsupported Media Type. Expected application/json or urlencoded' });
+    }
+  }
+  next();
+});
+
 // Payload parsers
 app.use(express.json({ limit: '1mb' })); // Added payload limit for security
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
