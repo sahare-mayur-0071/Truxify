@@ -27,6 +27,12 @@ function normalizeRequiredText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeCategoryAlias(value) {
+  const normalized = normalizeRequiredText(value).toLowerCase();
+  if (!normalized) return null;
+  return CATEGORY_MAP[normalized];
+}
+
 // ============================================================================
 // 1. LIST ACTIVE FAQS (PUBLIC)
 // ============================================================================
@@ -145,6 +151,11 @@ router.get('/tickets', authenticate, userLimiter, async (req, res) => {
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
   const offset = (pageNum - 1) * limitNum;
+  const dbCategory = normalizeCategoryAlias(category);
+
+  if (category && !dbCategory) {
+    return res.status(400).json({ error: 'Unsupported support ticket category.' });
+  }
 
   try {
     let query = supabase
@@ -156,8 +167,8 @@ router.get('/tickets', authenticate, userLimiter, async (req, res) => {
       query = query.eq('status', status);
     }
 
-    if (category) {
-      query = query.eq('category', category);
+    if (dbCategory) {
+      query = query.eq('category', dbCategory);
     }
 
     const { data: tickets, error, count } = await query
@@ -312,6 +323,11 @@ router.get('/admin/tickets', authenticate, userLimiter, requireRole(['admin']), 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
   const offset = (pageNum - 1) * limitNum;
+  const dbCategory = normalizeCategoryAlias(category);
+
+  if (category && !dbCategory) {
+    return res.status(400).json({ error: 'Unsupported support ticket category.' });
+  }
 
   try {
     let query = supabase
@@ -322,8 +338,8 @@ router.get('/admin/tickets', authenticate, userLimiter, requireRole(['admin']), 
       query = query.eq('status', status);
     }
 
-    if (category) {
-      query = query.eq('category', category);
+    if (dbCategory) {
+      query = query.eq('category', dbCategory);
     }
 
     if (user_id) {
